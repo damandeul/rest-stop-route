@@ -138,6 +138,88 @@ test('필수값 오류를 보여주고 첫 입력에 초점을 둔다', async ({
   await expect(page.getByLabel('출발지')).toBeFocused();
 });
 
+test('한글 조합 중에는 검색 입력 DOM을 교체하지 않고 조합 완료 후 결과를 보여준다', async ({ page }) => {
+  await page.goto('/');
+  const input = page.getByLabel('출발지');
+  const original = await input.elementHandle();
+  await input.evaluate((element) => {
+    element.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '' }));
+    element.value = '서';
+    element.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: '서',
+      inputType: 'insertCompositionText',
+      isComposing: true,
+    }));
+  });
+  expect(await original.evaluate((element) => element.isConnected)).toBe(true);
+  await input.evaluate((element) => {
+    element.value = '서울';
+    element.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '서울' }));
+  });
+  await expect(page.getByRole('searchbox', { name: '출발지' })).toHaveValue('서울');
+  await expect(page.getByRole('button', { name: /서울시청/ })).toBeVisible();
+});
+
+test('모바일 사용자는 위치 권한으로 현재 위치를 출발지로 선택할 수 있다', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition(success) {
+          success({ coords: { latitude: 37.5665, longitude: 126.978, accuracy: 18 } });
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '현재 위치 사용' }).click();
+  await expect(page.getByLabel('출발지')).toHaveValue('현재 위치');
+  await expect(page.getByText(/기기 위치정보로 선택됨/)).toBeVisible();
+  await expect(page.getByText(/브라우저 메모리에만/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '출발·도착 바꾸기' })).toBeDisabled();
+});
+
+test('위치 권한이 거부되어도 시설명 직접 입력을 계속 사용할 수 있다', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition(_success, error) {
+          error({ code: 1 });
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '현재 위치 사용' }).click();
+  await expect(page.getByRole('alert')).toContainText('위치 권한이 거부됐어요');
+  await expect(page.getByRole('searchbox', { name: '출발지' })).toBeEnabled();
+  await page.getByRole('searchbox', { name: '출발지' }).fill('서울');
+  await expect(page.getByRole('button', { name: /서울시청/ })).toBeVisible();
+});
+
+test('위치 확인 중 시설명을 입력하면 늦게 도착한 위치 응답이 입력을 덮어쓰지 않는다', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition(success) {
+          window.resolveCurrentLocation = () => success({
+            coords: { latitude: 37.5665, longitude: 126.978, accuracy: 18 },
+          });
+        },
+      },
+    });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: '현재 위치 사용' }).click();
+  await page.getByRole('searchbox', { name: '출발지' }).fill('서울');
+  await page.evaluate(() => window.resolveCurrentLocation());
+  await expect(page.getByRole('searchbox', { name: '출발지' })).toHaveValue('서울');
+  await expect(page.getByRole('button', { name: /서울시청/ })).toBeVisible();
+});
+
 test('전국 장소 검색 데모는 주소와 행정구역을 함께 제공한다', async ({ page }) => {
   await page.goto('/');
   await page.getByLabel('목적지').fill('제주');

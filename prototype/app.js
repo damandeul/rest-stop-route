@@ -32,8 +32,10 @@ const state = {
   minutes: null,
   conditions: [],
   errors: {},
-  lastResultScroll: 0
+  lastResultScroll: 0,
+  location: { status: 'idle', message: '' }
 };
+let locationRequestId = 0;
 
 function escapeHtml(value = '') {
   return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -67,6 +69,9 @@ function placeField(kind, label) {
     <input id="${kind}" type="search" data-search="${kind}" value="${escapeHtml(state.queries[kind])}" placeholder="도로명주소나 시설명 검색" autocomplete="off" aria-describedby="${kind}-selected ${kind}-error">
     <div id="${kind}-selected" class="selected-place">${selected ? `선택: ${selected.address}` : ''}</div>
     ${state.errors[kind] ? `<div id="${kind}-error" class="error">${state.errors[kind]}</div>` : ''}
+    ${kind === 'start' ? `<button type="button" class="location-button" data-action="use-location" ${state.location.status === 'loading' ? 'disabled' : ''}>${state.location.status === 'loading' ? '현재 위치 확인 중…' : '현재 위치 사용'}</button>
+      <p class="search-note">위치 권한을 허용하면 현재 위치를 출발지로 선택해요. 좌표는 브라우저 메모리에만 유지되고 저장하지 않아요.</p>
+      ${state.location.message ? `<div class="error" role="alert">${state.location.message}</div>` : ''}` : ''}
     ${searchResults(kind)}
   </div>`;
 }
@@ -82,7 +87,7 @@ function renderInput() {
       <h2 id="route-title">어디에서 어디까지 갈까요?</h2>
       <p class="search-note"><strong>전국 검색 데모</strong> · 서울·부산·대전·대구·광주·제주 예시 장소를 검색할 수 있어요.</p>
       ${placeField('start', '출발지')}
-      <button class="swap" data-action="swap">↕ 출발·도착 바꾸기</button>
+      <button class="swap" data-action="swap" ${state.start?.id === 'current-location' ? 'disabled title="현재 위치는 출발지로만 사용할 수 있어요."' : ''}>↕ 출발·도착 바꾸기</button>
       ${placeField('destination', '목적지')}
     </section>
     <fieldset class="section">
@@ -98,16 +103,31 @@ function renderInput() {
     <p class="privacy"><span aria-hidden="true">▣</span><span>검색한 장소와 선택 조건은 사용자 이력으로 저장하지 않아요. 새로고침하면 초기화돼요.</span></p>
     <button class="primary" data-action="submit">휴식 후보 이어보기</button>`;
   bindCommon();
-  document.querySelectorAll('[data-search]').forEach((input) => input.addEventListener('input', (event) => {
-    const kind = event.target.dataset.search;
-    state.queries[kind] = event.target.value;
-    state[kind] = null;
-    delete state.errors[kind];
-    renderInput();
-    const next = document.querySelector(`[data-search="${kind}"]`);
-    next.focus();
-    next.setSelectionRange(next.value.length, next.value.length);
-  }));
+  document.querySelectorAll('[data-search]').forEach((input) => {
+    const updateSearch = (target) => {
+      const kind = target.dataset.search;
+      state.queries[kind] = target.value;
+      state[kind] = null;
+      if (kind === 'start') {
+        locationRequestId += 1;
+        state.location = { status: 'idle', message: '' };
+      }
+      delete state.errors[kind];
+      renderInput();
+      const next = document.querySelector(`[data-search="${kind}"]`);
+      next.focus();
+      next.setSelectionRange(next.value.length, next.value.length);
+    };
+    input.addEventListener('compositionstart', () => { input.dataset.composing = 'true'; });
+    input.addEventListener('compositionend', (event) => {
+      delete input.dataset.composing;
+      updateSearch(event.target);
+    });
+    input.addEventListener('input', (event) => {
+      if (event.isComposing || event.target.dataset.composing === 'true') return;
+      updateSearch(event.target);
+    });
+  });
   document.querySelectorAll('input[name="minutes"]').forEach((input) => input.addEventListener('change', () => { state.minutes = Number(input.value); delete state.errors.minutes; renderInput(); }));
   document.querySelectorAll('input[name="conditions"]').forEach((input) => input.addEventListener('change', () => {
     state.conditions = input.checked ? [...state.conditions, input.value] : state.conditions.filter((c) => c !== input.value);
@@ -298,6 +318,52 @@ function handleDialogAction(action, el) {
   if (action === 'close-alternatives') { announce('대안 검토 선택됨 — 외부 서비스는 열지 않았어요.'); el.close(); }
   if (action === 'open-map' || action === 'open-source') { announce('프로토타입이라 외부 페이지는 열지 않았어요.'); el.close(); }
 }
+function useCurrentLocation() {
+  const requestId = ++locationRequestId;
+  if (!navigator.geolocation) {
+    state.location = { status: 'error', message: '이 브라우저에서는 현재 위치를 사용할 수 없어요. 시설명을 직접 입력해 주세요.' };
+    renderInput();
+    return;
+  }
+  state.location = { status: 'loading', message: '' };
+  renderInput();
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => {
+      if (requestId !== locationRequestId) return;
+      const { latitude, longitude, accuracy } = coords;
+      if (![latitude, longitude].every(Number.isFinite)) {
+        state.location = { status: 'error', message: '현재 위치 좌표를 확인하지 못했어요. 시설명을 직접 입력해 주세요.' };
+        renderInput();
+        return;
+      }
+      const accuracyText = Number.isFinite(accuracy) ? ` · 정확도 약 ${Math.round(accuracy)}m` : '';
+      state.start = {
+        id: 'current-location',
+        name: '현재 위치',
+        address: `기기 위치정보로 선택됨${accuracyText}`,
+        region: '현재 위치',
+        lat: latitude,
+        lon: longitude,
+      };
+      state.queries.start = '현재 위치';
+      state.location = { status: 'ready', message: '' };
+      delete state.errors.start;
+      renderInput();
+      announce('현재 위치를 출발지로 선택했어요.');
+    },
+    (error) => {
+      if (requestId !== locationRequestId) return;
+      const messages = {
+        1: '위치 권한이 거부됐어요. 브라우저 설정에서 허용하거나 시설명을 직접 입력해 주세요.',
+        2: '현재 위치를 확인하지 못했어요. 잠시 후 다시 시도하거나 시설명을 직접 입력해 주세요.',
+        3: '현재 위치 확인 시간이 초과됐어요. 다시 시도하거나 시설명을 직접 입력해 주세요.',
+      };
+      state.location = { status: 'error', message: messages[error.code] || '현재 위치를 사용할 수 없어요. 시설명을 직접 입력해 주세요.' };
+      renderInput();
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
+  );
+}
 function validateAndSubmit() {
   state.errors = {};
   if (!state.start) state.errors.start = '출발지를 선택해 주세요.';
@@ -316,6 +382,7 @@ function bindCommon() {
   document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
     const action = button.dataset.action;
     if (action === 'submit') validateAndSubmit();
+    if (action === 'use-location') useCurrentLocation();
     if (action === 'input') renderInput();
     if (action === 'result') renderResult();
     if (action === 'detail') { state.lastResultScroll = scrollY; renderDetail(); window.scrollTo(0,0); }

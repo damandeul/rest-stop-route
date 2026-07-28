@@ -48,8 +48,11 @@ input[type="search"]::placeholder { color: #80756e; }
 .search-result { width: 100%; min-height: 58px; border: 1px solid var(--line); background: #fff; border-radius: 12px; padding: 11px 13px; text-align: left; line-height: 1.38; }
 .search-result strong, .search-result small { display: block; }
 .search-result small { margin-top: 3px; color: var(--muted); font-size: 13px; }
-.search-note { font-size: 13px; color: var(--muted); }
+.search-note { font-size: 13px; color: var(--muted); word-break: keep-all; }
+.location-button { width: 100%; min-height: 48px; border: 1.5px solid var(--info); background: #edf6f7; color: #174e57; border-radius: 12px; padding: 10px 14px; font-weight: 800; }
+.location-button:disabled { opacity: .65; cursor: wait; }
 .swap { justify-self: center; min-height: 44px; border: 0; background: var(--soft); border-radius: 999px; padding: 0 15px; font-weight: 700; }
+.swap:disabled { opacity: .55; cursor: not-allowed; }
 fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .help { margin: 6px 0 12px; color: var(--muted); font-size: 14px; }
 .segment { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
