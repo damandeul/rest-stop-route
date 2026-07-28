@@ -1,0 +1,30 @@
+# Secrets and local credentials
+.secrets/
+.env
+.env.*
+!.env.example
+
+# Dependencies and test output
+node_modules/
+test-results/
+playwright-report/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated temporary files
+*.tmp
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+dist/
+.DS_Store
+
+# Official-data snapshots and derived datasets require separate redistribution review
+data/raw/*.json
+data/processed/*.jsonl
+.vercel

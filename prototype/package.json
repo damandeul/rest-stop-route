@@ -1,0 +1,16 @@
+{
+  "name": "rest-stop-route-prototype",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "build:index": "python3 ../scripts/build_search_index.py",
+    "pretest": "npm run build:index",
+    "serve": "node --no-warnings=ExperimentalWarning server.mjs",
+    "test": "python3 -m unittest discover ../scripts/tests -p 'test_*.py' && playwright test",
+    "test:headed": "playwright test --headed",
+    "screenshot": "playwright test tests/screenshot.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}
