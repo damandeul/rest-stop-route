@@ -36,6 +36,7 @@ const state = {
   location: { status: 'idle', message: '' }
 };
 let locationRequestId = 0;
+let pendingCompositionCommit = null;
 
 function escapeHtml(value = '') {
   return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
@@ -57,7 +58,7 @@ function searchResults(kind) {
   if (query.length < 2 || state[kind]) return '';
   const matches = places.filter((place) => `${place.name} ${place.address}`.toLowerCase().includes(query));
   return `<div class="results" aria-label="${kind === 'start' ? '출발지' : '목적지'} 검색 결과">
-    ${matches.length ? matches.map((place) => `<button class="search-result" data-select-place="${kind}" data-place-id="${place.id}"><strong>${place.name}</strong><small>${place.address} · ${place.region}</small></button>`).join('') : `<div class="card"><strong>장소를 찾지 못했어요.</strong><p class="search-note">도로명주소나 주변 시설명으로 다시 검색해 주세요.</p></div>`}
+    ${matches.length ? matches.map((place) => `<button class="search-result" data-select-place="${kind}" data-place-id="${escapeHtml(place.id)}"><strong>${escapeHtml(place.name)}</strong><small>${escapeHtml(place.address)} · ${escapeHtml(place.region)}</small></button>`).join('') : `<div class="card"><strong>장소를 찾지 못했어요.</strong><p class="search-note">도로명주소나 주변 시설명으로 다시 검색해 주세요.</p></div>`}
     <p class="search-note">장소를 찾았더라도 이 지역의 휴식 후보 자료는 부족할 수 있어요.</p>
   </div>`;
 }
@@ -67,7 +68,7 @@ function placeField(kind, label) {
   return `<div class="field">
     <label for="${kind}">${label}</label>
     <input id="${kind}" type="search" data-search="${kind}" value="${escapeHtml(state.queries[kind])}" placeholder="도로명주소나 시설명 검색" autocomplete="off" aria-describedby="${kind}-selected ${kind}-error">
-    <div id="${kind}-selected" class="selected-place">${selected ? `선택: ${selected.address}` : ''}</div>
+    <div id="${kind}-selected" class="selected-place">${selected ? `선택: ${escapeHtml(selected.address)}` : ''}</div>
     ${state.errors[kind] ? `<div id="${kind}-error" class="error">${state.errors[kind]}</div>` : ''}
     ${kind === 'start' ? `<button type="button" class="location-button" data-action="use-location" ${state.location.status === 'loading' ? 'disabled' : ''}>${state.location.status === 'loading' ? '현재 위치 확인 중…' : '현재 위치 사용'}</button>
       <p class="search-note">위치 권한을 허용하면 현재 위치를 출발지로 선택해요. 좌표는 브라우저 메모리에만 유지되고 저장하지 않아요.</p>
@@ -87,7 +88,8 @@ function renderInput() {
       <h2 id="route-title">어디에서 어디까지 갈까요?</h2>
       <p class="search-note"><strong>전국 검색 데모</strong> · 서울·부산·대전·대구·광주·제주 예시 장소를 검색할 수 있어요.</p>
       ${placeField('start', '출발지')}
-      <button class="swap" data-action="swap" ${state.start?.id === 'current-location' ? 'disabled title="현재 위치는 출발지로만 사용할 수 있어요."' : ''}>↕ 출발·도착 바꾸기</button>
+      <button class="swap" data-action="swap" ${state.start?.id === 'current-location' ? 'disabled aria-describedby="current-location-swap-note"' : ''}>↕ 출발·도착 바꾸기</button>
+      ${state.start?.id === 'current-location' ? '<p id="current-location-swap-note" class="search-note swap-note">현재 위치는 출발지로만 사용할 수 있어 출발·도착을 바꿀 수 없어요.</p>' : ''}
       ${placeField('destination', '목적지')}
     </section>
     <fieldset class="section">
@@ -121,10 +123,17 @@ function renderInput() {
     input.addEventListener('compositionstart', () => { input.dataset.composing = 'true'; });
     input.addEventListener('compositionend', (event) => {
       delete input.dataset.composing;
+      pendingCompositionCommit = { kind: event.target.dataset.search, value: event.target.value };
       updateSearch(event.target);
     });
     input.addEventListener('input', (event) => {
-      if (event.isComposing || event.target.dataset.composing === 'true') return;
+      if (!event.target.isConnected || event.isComposing || event.target.dataset.composing === 'true') return;
+      if (pendingCompositionCommit) {
+        const isDuplicateCommit = pendingCompositionCommit.kind === event.target.dataset.search
+          && pendingCompositionCommit.value === event.target.value;
+        pendingCompositionCommit = null;
+        if (isDuplicateCommit) return;
+      }
       updateSearch(event.target);
     });
   });
@@ -135,6 +144,7 @@ function renderInput() {
   }));
   document.querySelectorAll('[data-select-place]').forEach((button) => button.addEventListener('click', () => {
     const kind = button.dataset.selectPlace;
+    if (kind === 'start') cancelLocationRequest();
     state[kind] = places.find((place) => place.id === button.dataset.placeId);
     state.queries[kind] = state[kind].name;
     delete state.errors[kind];
@@ -329,7 +339,7 @@ function useCurrentLocation() {
   renderInput();
   navigator.geolocation.getCurrentPosition(
     ({ coords }) => {
-      if (requestId !== locationRequestId) return;
+      if (requestId !== locationRequestId || state.location.status !== 'loading') return;
       const { latitude, longitude, accuracy } = coords;
       if (![latitude, longitude].every(Number.isFinite)) {
         state.location = { status: 'error', message: '현재 위치 좌표를 확인하지 못했어요. 시설명을 직접 입력해 주세요.' };
@@ -352,7 +362,7 @@ function useCurrentLocation() {
       announce('현재 위치를 출발지로 선택했어요.');
     },
     (error) => {
-      if (requestId !== locationRequestId) return;
+      if (requestId !== locationRequestId || state.location.status !== 'loading') return;
       const messages = {
         1: '위치 권한이 거부됐어요. 브라우저 설정에서 허용하거나 시설명을 직접 입력해 주세요.',
         2: '현재 위치를 확인하지 못했어요. 잠시 후 다시 시도하거나 시설명을 직접 입력해 주세요.',
@@ -364,7 +374,12 @@ function useCurrentLocation() {
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
   );
 }
+function cancelLocationRequest() {
+  locationRequestId += 1;
+  if (state.location.status === 'loading') state.location = { status: 'idle', message: '' };
+}
 function validateAndSubmit() {
+  cancelLocationRequest();
   state.errors = {};
   if (!state.start) state.errors.start = '출발지를 선택해 주세요.';
   if (!state.destination) state.errors.destination = '목적지를 선택해 주세요.';
@@ -386,7 +401,7 @@ function bindCommon() {
     if (action === 'input') renderInput();
     if (action === 'result') renderResult();
     if (action === 'detail') { state.lastResultScroll = scrollY; renderDetail(); window.scrollTo(0,0); }
-    if (action === 'swap') { [state.start, state.destination] = [state.destination, state.start]; [state.queries.start, state.queries.destination] = [state.queries.destination, state.queries.start]; renderInput(); }
+    if (action === 'swap') { cancelLocationRequest(); [state.start, state.destination] = [state.destination, state.start]; [state.queries.start, state.queries.destination] = [state.queries.destination, state.queries.start]; renderInput(); }
     if (action === 'share') dialog('공유할 내용을 확인해 주세요', '<p>출발지·목적지·선택 조건·예상 경로·자료 기준일이 포함돼요.</p><p class="help">프로토타입에서는 실제 링크를 만들거나 전송하지 않아요.</p>', '공유 미리보기', 'share-preview');
     if (action === 'alternatives') dialog('무리하지 않는 다른 방법을 먼저 살펴보세요', '<div class="stack"><label><input type="radio" name="alt"> 이동 미루기</label><label><input type="radio" name="alt"> 대중교통 확인</label><label><input type="radio" name="alt"> 택시 이용</label><label><input type="radio" name="alt"> 보호자와 동행 상의</label></div><p class="help">외부 예약·호출은 하지 않아요.</p>', '선택 완료', 'close-alternatives', '결과 다시 보기');
     if (action === 'map') dialog('지도 앱에서 위치를 열까요?', '<p>외부 지도는 위치 확인용이에요. 쉬어갈지도의 휴식 조건이나 구간 판단이 반영되지 않을 수 있어요.</p>', '위치 열기', 'open-map');
