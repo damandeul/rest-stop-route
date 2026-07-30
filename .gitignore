@@ -18,6 +18,7 @@ venv/
 # Generated temporary files
 *.tmp
 *.sqlite
+!prototype/data/heat-shelters.sqlite
 *.sqlite-journal
 *.sqlite-wal
 *.sqlite-shm

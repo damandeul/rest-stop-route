@@ -1,0 +1,177 @@
+{
+  "checkedAt": "2026-07-30T05:32:34.550Z",
+  "flow": "direct-search-to-official-results",
+  "viewports": [
+    {
+      "screen": "search",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "documentWidth": 390,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "official-results",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "documentWidth": 390,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "source-detail-open",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "documentWidth": 390,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "search",
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "documentWidth": 768,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "official-results",
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "documentWidth": 768,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "source-detail-open",
+      "viewport": {
+        "width": 768,
+        "height": 900
+      },
+      "documentWidth": 768,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "search",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "documentWidth": 1024,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "official-results",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "documentWidth": 1024,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "source-detail-open",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "documentWidth": 1024,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "search",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "documentWidth": 1440,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "official-results",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "documentWidth": 1440,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "source-detail-open",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "documentWidth": 1440,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    }
+  ],
+  "consoleErrors": [],
+  "pageErrors": [],
+  "failedRequests": [],
+  "zoom200": [
+    {
+      "screen": "search-200-percent-zoom",
+      "viewport": {
+        "width": 195,
+        "height": 422
+      },
+      "documentWidth": 195,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "official-results-200-percent-zoom",
+      "viewport": {
+        "width": 195,
+        "height": 422
+      },
+      "documentWidth": 195,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    },
+    {
+      "screen": "source-detail-open-200-percent-zoom",
+      "viewport": {
+        "width": 195,
+        "height": 422
+      },
+      "documentWidth": 195,
+      "horizontalOverflow": 0,
+      "overflowOffenders": [],
+      "undersizedTargets": []
+    }
+  ],
+  "pass": true
+}

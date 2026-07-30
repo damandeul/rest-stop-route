@@ -1,412 +1,453 @@
 const app = document.querySelector('#app');
 const live = document.querySelector('#live');
-
-const places = [
-  { id: 'seoul-city', name: '서울시청', address: '서울특별시 중구 세종대로 110', region: '서울특별시 중구', lat: 37.5665, lon: 126.9780 },
-  { id: 'seoul-library', name: '서울도서관', address: '서울특별시 중구 세종대로 110', region: '서울특별시 중구', lat: 37.5663, lon: 126.9779, scenario: 'CONNECTED' },
-  { id: 'busan-station', name: '부산역', address: '부산광역시 동구 중앙대로 206', region: '부산광역시 동구', lat: 35.1151, lon: 129.0414, scenario: 'REST_GAP' },
-  { id: 'jeju-city', name: '제주시청', address: '제주특별자치도 제주시 광양9길 10', region: '제주특별자치도 제주시', lat: 33.4996, lon: 126.5312, scenario: 'DATA_GAP' },
-  { id: 'daejeon-city', name: '대전시청', address: '대전광역시 서구 둔산로 100', region: '대전광역시 서구', lat: 36.3504, lon: 127.3845, scenario: 'ROUTE_ERROR' },
-  { id: 'gwangju-city', name: '광주시청', address: '광주광역시 서구 내방로 111', region: '광주광역시 서구', lat: 35.1601, lon: 126.8514, scenario: 'DATA_GAP' },
-  { id: 'daegu-city', name: '대구시청 동인청사', address: '대구광역시 중구 공평로 88', region: '대구광역시 중구', lat: 35.8714, lon: 128.6014, scenario: 'DATA_GAP' }
-];
-
-const candidate = {
-  name: '한빛 무더위쉼터',
-  address: '서울특별시 중구 예시로 12 (예시 주소)',
-  type: '무더위쉼터 · 공공시설',
-  confirmed: ['냉방 실내', '화장실'],
-  unknown: ['그늘', '벤치', '물'],
-  confidence: '낮음',
-  reason: '공식 출처와 갱신일은 있지만 운영시간이 제공되지 않았어요.',
-  updated: '2026-07-20',
-  source: '행정안전부 무더위쉼터 API',
-  sourceUrl: 'https://www.data.go.kr/data/15013199/standard.do'
-};
+const OFFICIAL_SOURCE_URL = 'https://www.safetydata.go.kr/disaster-data/view?dataSn=1338';
 
 const state = {
-  screen: 'input',
-  start: null,
-  destination: null,
-  queries: { start: '', destination: '' },
-  minutes: null,
-  conditions: [],
-  errors: {},
-  lastResultScroll: 0,
-  location: { status: 'idle', message: '' }
+  center: null,
+  centerLabel: '',
+  radiusKm: 2,
+  aircon: 'all',
+  view: 'search',
+  searchResults: [],
+  shelters: [],
+  loading: false,
+  message: '',
 };
-let locationRequestId = 0;
-let pendingCompositionCommit = null;
 
-function escapeHtml(value = '') {
-  return value.replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
-}
-
-function announce(message) { live.textContent = message; }
-function header(backLabel, onBack) {
-  return `<header class="app-header">${backLabel ? `<button class="back" data-action="${onBack}">← ${backLabel}</button>` : ''}<span class="brand">쉬어갈지도</span></header>`;
-}
-function safety() {
-  return `<aside class="safety"><strong>폭염 이동 주의</strong><p>예상 보행시간과 휴식 후보 정보는 실제 날씨·경사·신호대기·운영 상황과 다를 수 있어요. 몸이 불편하면 이동을 멈추고 시원한 곳으로 이동하세요.</p></aside>`;
-}
-function emergency() {
-  return `<aside class="emergency"><strong>응급 상황</strong><p>어지럼, 두통, 메스꺼움, 의식 저하 등 이상이 있으면 즉시 이동을 멈추고 주변에 도움을 요청하세요. 응급 상황에서는 119에 연락하세요.</p></aside>`;
+function announce(message) {
+  live.textContent = '';
+  requestAnimationFrame(() => { live.textContent = message; });
 }
 
-function searchResults(kind) {
-  const query = state.queries[kind].trim().toLowerCase();
-  if (query.length < 2 || state[kind]) return '';
-  const matches = places.filter((place) => `${place.name} ${place.address}`.toLowerCase().includes(query));
-  return `<div class="results" aria-label="${kind === 'start' ? '출발지' : '목적지'} 검색 결과">
-    ${matches.length ? matches.map((place) => `<button class="search-result" data-select-place="${kind}" data-place-id="${escapeHtml(place.id)}"><strong>${escapeHtml(place.name)}</strong><small>${escapeHtml(place.address)} · ${escapeHtml(place.region)}</small></button>`).join('') : `<div class="card"><strong>장소를 찾지 못했어요.</strong><p class="search-note">도로명주소나 주변 시설명으로 다시 검색해 주세요.</p></div>`}
-    <p class="search-note">장소를 찾았더라도 이 지역의 휴식 후보 자료는 부족할 수 있어요.</p>
-  </div>`;
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+  })[character]);
 }
 
-function placeField(kind, label) {
-  const selected = state[kind];
-  return `<div class="field">
-    <label for="${kind}">${label}</label>
-    <input id="${kind}" type="search" data-search="${kind}" value="${escapeHtml(state.queries[kind])}" placeholder="도로명주소나 시설명 검색" autocomplete="off" aria-describedby="${kind}-selected ${kind}-error">
-    <div id="${kind}-selected" class="selected-place">${selected ? `선택: ${escapeHtml(selected.address)}` : ''}</div>
-    ${state.errors[kind] ? `<div id="${kind}-error" class="error">${state.errors[kind]}</div>` : ''}
-    ${kind === 'start' ? `<button type="button" class="location-button" data-action="use-location" ${state.location.status === 'loading' ? 'disabled' : ''}>${state.location.status === 'loading' ? '현재 위치 확인 중…' : '현재 위치 사용'}</button>
-      <p class="search-note">위치 권한을 허용하면 현재 위치를 출발지로 선택해요. 좌표는 브라우저 메모리에만 유지되고 저장하지 않아요.</p>
-      ${state.location.message ? `<div class="error" role="alert">${state.location.message}</div>` : ''}` : ''}
-    ${searchResults(kind)}
-  </div>`;
+function header(backLabel = '') {
+  return `<header class="app-header">
+    ${backLabel ? `<button class="back" type="button" id="back-button">← ${backLabel}</button>` : ''}
+    <span class="brand"><span class="brand-line" aria-hidden="true"></span>쉬어갈지도</span>
+  </header>`;
 }
 
-function renderInput() {
-  state.screen = 'input';
+function renderSearch() {
   app.innerHTML = `${header()}
-    <h1>걷기 전에,<br>쉴 후보를 이어봐요</h1>
-    <p class="lede">내가 고른 보행시간 안에 다음 휴식 후보가 이어지는지 확인해요.</p>
-    <aside class="card notice"><strong>☀ 주의</strong><p>폭염에는 외출을 미루거나 대중교통을 먼저 고려하세요. 쉬어갈지도는 이동 안전을 보장하지 않아요.</p></aside>
-    ${Object.keys(state.errors).length ? '<div class="error-summary" role="alert" tabindex="-1">입력하지 않은 항목이 있어요.</div>' : ''}
-    <section class="section stack" aria-labelledby="route-title">
-      <h2 id="route-title">어디에서 어디까지 갈까요?</h2>
-      <p class="search-note"><strong>전국 검색 데모</strong> · 서울·부산·대전·대구·광주·제주 예시 장소를 검색할 수 있어요.</p>
-      ${placeField('start', '출발지')}
-      <button class="swap" data-action="swap" ${state.start?.id === 'current-location' ? 'disabled aria-describedby="current-location-swap-note"' : ''}>↕ 출발·도착 바꾸기</button>
-      ${state.start?.id === 'current-location' ? '<p id="current-location-swap-note" class="search-note swap-note">현재 위치는 출발지로만 사용할 수 있어 출발·도착을 바꿀 수 없어요.</p>' : ''}
-      ${placeField('destination', '목적지')}
+    <section aria-labelledby="page-title">
+      <h1 id="page-title">가까운 무더위쉼터를 찾아봐요</h1>
+      <p class="lede">현재 위치나 직접 선택한 기준 장소 주변의 공식 등록 쉼터를 거리순으로 확인해요.</p>
+      <div class="notice card">
+        <strong>폭염 이동 주의</strong>
+        <p>등록 정보만으로 당일 개방, 좌석, 냉방기 작동을 알 수 없어요. 이용 전 공식 원문이나 현장 안내를 다시 확인하세요.</p>
+      </div>
     </section>
+
+    <section class="section" aria-labelledby="location-title">
+      <h2 id="location-title">어디 주변을 찾아볼까요?</h2>
+      <div class="location-choice">
+        <div>
+          <strong>지금 있는 곳에서 찾기</strong>
+          <p>버튼을 누를 때만 위치 권한을 요청해요.</p>
+        </div>
+        <button id="use-current-location" class="location-button" type="button">현재 위치로 찾기</button>
+      </div>
+      <div class="choice-divider"><span>또는 직접 입력</span></div>
+      <div class="field">
+        <label for="place-query">주소나 쉼터명으로 기준 장소 찾기</label>
+        <input id="place-query" type="search" autocomplete="off" enterkeyhint="search" placeholder="예: 종로구, 주민센터, 도로명주소" aria-describedby="search-help">
+        <p id="search-help" class="search-note">공식 쉼터의 이름·주소에서 검색하며, 결과 한 곳을 기준 위치로 사용해요.</p>
+        <div id="place-results" class="results" role="listbox" aria-label="기준 장소 검색 결과"></div>
+        <p id="selected-place" class="selected-place" aria-live="polite"></p>
+      </div>
+    </section>
+
     <fieldset class="section">
-      <legend>한 번에 최대 몇 분까지 걸을까요?</legend>
-      <p class="help">진단명이나 건강정보는 묻지 않아요. 쉬기 전까지 걷고 싶은 시간을 골라 주세요.</p>
-      <div class="segment">${[3,5,10].map((m) => `<label><input type="radio" name="minutes" value="${m}" ${state.minutes === m ? 'checked' : ''}><span>${state.minutes === m ? '✓ ' : ''}${m}분</span></label>`).join('')}</div>
-      ${state.errors.minutes ? `<div class="error">${state.errors.minutes}</div>` : ''}
+      <legend>얼마나 넓게 찾아볼까요?</legend>
+      <p class="help">직선거리 기준이며 실제 보행거리와 다를 수 있어요.</p>
+      <div class="segment">
+        ${[1, 2, 5, 10].map((radius) => `<label><input type="radio" name="radius" value="${radius}" ${radius === state.radiusKm ? 'checked' : ''}><span>${radius}km</span></label>`).join('')}
+      </div>
     </fieldset>
+
     <fieldset class="section">
-      <legend>어떤 휴식이 필요할까요?</legend><p class="help">여러 개 고를 수 있어요.</p>
-      <div class="chips">${['그늘','벤치','냉방 실내','물','화장실'].map((c) => `<label><input type="checkbox" name="conditions" value="${c}" ${state.conditions.includes(c) ? 'checked' : ''}><span>${state.conditions.includes(c) ? '✓ ' : ''}${c}</span></label>`).join('')}</div>
+      <legend>냉방기 수량 자료</legend>
+      <p class="help">수량이 있어도 현재 작동 중이라는 뜻은 아니에요.</p>
+      <div class="chips">
+        <label><input type="radio" name="aircon" value="all" ${state.aircon === 'all' ? 'checked' : ''}><span>전체 보기</span></label>
+        <label><input type="radio" name="aircon" value="true" ${state.aircon === 'true' ? 'checked' : ''}><span>1대 이상만</span></label>
+      </div>
     </fieldset>
-    <p class="privacy"><span aria-hidden="true">▣</span><span>검색한 장소와 선택 조건은 사용자 이력으로 저장하지 않아요. 새로고침하면 초기화돼요.</span></p>
-    <button class="primary" data-action="submit">휴식 후보 이어보기</button>`;
-  bindCommon();
-  document.querySelectorAll('[data-search]').forEach((input) => {
-    const updateSearch = (target) => {
-      const kind = target.dataset.search;
-      state.queries[kind] = target.value;
-      state[kind] = null;
-      if (kind === 'start') {
-        locationRequestId += 1;
-        state.location = { status: 'idle', message: '' };
-      }
-      delete state.errors[kind];
-      renderInput();
-      const next = document.querySelector(`[data-search="${kind}"]`);
-      next.focus();
-      next.setSelectionRange(next.value.length, next.value.length);
-    };
-    input.addEventListener('compositionstart', () => { input.dataset.composing = 'true'; });
-    input.addEventListener('compositionend', (event) => {
-      delete input.dataset.composing;
-      pendingCompositionCommit = { kind: event.target.dataset.search, value: event.target.value };
-      updateSearch(event.target);
-    });
-    input.addEventListener('input', (event) => {
-      if (!event.target.isConnected || event.isComposing || event.target.dataset.composing === 'true') return;
-      if (pendingCompositionCommit) {
-        const isDuplicateCommit = pendingCompositionCommit.kind === event.target.dataset.search
-          && pendingCompositionCommit.value === event.target.value;
-        pendingCompositionCommit = null;
-        if (isDuplicateCommit) return;
-      }
-      updateSearch(event.target);
-    });
+
+    <p class="privacy"><span aria-hidden="true">▣</span><span>위치는 검색에만 사용하고 앱에서 저장하지 않아요.</span></p>
+    <button id="find-shelters" class="primary" type="button" disabled>주변 쉼터 보기</button>
+
+    <section class="data-summary section" aria-label="데이터 출처">
+      <strong>행정안전부 공식자료 60,672건</strong>
+      <p>재난안전데이터공유플랫폼 · 이용허락범위 제한 없음</p>
+    </section>
+  `;
+  bindSearchEvents();
+}
+
+let searchTimer = null;
+let searchController = null;
+let composing = false;
+let locationRequestId = 0;
+let nearbyController = null;
+let nearbyRequestId = 0;
+
+function resetLocationButton() {
+  const button = document.querySelector('#use-current-location');
+  if (!button) return;
+  button.disabled = false;
+  button.removeAttribute('aria-busy');
+  button.textContent = '현재 위치로 찾기';
+}
+
+function cancelLocationRequest() {
+  locationRequestId += 1;
+  resetLocationButton();
+}
+
+function cancelNearbyRequest() {
+  nearbyRequestId += 1;
+  nearbyController?.abort();
+  nearbyController = null;
+  state.loading = false;
+}
+
+async function postAction(payload, signal) {
+  const response = await fetch('/api/shelters', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
   });
-  document.querySelectorAll('input[name="minutes"]').forEach((input) => input.addEventListener('change', () => { state.minutes = Number(input.value); delete state.errors.minutes; renderInput(); }));
-  document.querySelectorAll('input[name="conditions"]').forEach((input) => input.addEventListener('change', () => {
-    state.conditions = input.checked ? [...state.conditions, input.value] : state.conditions.filter((c) => c !== input.value);
-    renderInput();
-  }));
-  document.querySelectorAll('[data-select-place]').forEach((button) => button.addEventListener('click', () => {
-    const kind = button.dataset.selectPlace;
-    if (kind === 'start') cancelLocationRequest();
-    state[kind] = places.find((place) => place.id === button.dataset.placeId);
-    state.queries[kind] = state[kind].name;
-    delete state.errors[kind];
-    renderInput();
-    announce(`${kind === 'start' ? '출발지' : '목적지'}로 ${state[kind].name} 선택됨`);
-  }));
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || '데이터를 불러오지 못했어요.');
+  return body;
 }
 
-const statusContent = {
-  CONNECTED: { icon: '✓', title: '조건에 맞는 후보가 이어짐', text: '선택한 조건에 맞는 휴식 후보가 이어져 있어요. 실제 운영 여부와 현장 상태는 출발 전에 다시 확인하세요.', cls: 'status-connected' },
-  REST_GAP: { icon: '!', title: '휴식점 부족', text: '선택한 보행시간 안에 연결되는 휴식 후보를 찾지 못한 구간이 있어요.', cls: 'status-gap' },
-  DATA_GAP: { icon: '?', title: '정보 부족', text: '이 지역은 공개자료가 부족해 휴식 후보가 없다고 판단할 수 없어요. 시설이 없다는 뜻은 아니에요.', cls: 'status-data' },
-  ROUTE_ERROR: { icon: '!', title: '경로 계산 불가', text: '이 구간의 보행시간을 계산하지 못했어요. 거리나 시간을 임의로 추정하지 않았어요.', cls: 'status-error' }
-};
-function scenario() {
-  const destinationScenario = state.destination?.scenario || 'CONNECTED';
-  if (state.conditions.some((condition) => !candidate.confirmed.includes(condition))) return 'DATA_GAP';
-  if (destinationScenario !== 'CONNECTED') return destinationScenario;
-  return segmentTimes('CONNECTED').some((minutes) => minutes > state.minutes) ? 'REST_GAP' : 'CONNECTED';
-}
-function segmentTimes(type) {
-  return type === 'REST_GAP'
-    ? [Math.max(8, state.minutes + 5), 2]
-    : [4, 5];
-}
-function resultTimeline(type) {
-  if (type === 'DATA_GAP') return `<div class="segment-card"><h3>판단할 자료가 부족한 구간</h3><p>선택한 ‘${state.conditions.join(', ') || '조건 무관'}’ 공개자료의 범위와 갱신일을 확인하지 못했어요.</p></div>`;
-  if (type === 'ROUTE_ERROR') return `<div class="segment-card"><h3>출발지 → 목적지</h3><p class="warning-inline">보행시간을 계산하지 못했어요.</p><p>직선거리 환산값이나 임의 시간은 표시하지 않아요.</p></div>`;
-  const over = type === 'REST_GAP';
-  const [first, second] = segmentTimes(type);
-  return `<div class="segment-card ${over ? 'over' : ''}"><h3>구간 1 · ${state.start.name} → ${candidate.name}</h3><div class="duration">예상 ${first}분</div><p>${over ? `선택한 ${state.minutes}분 초과 · 약 ${first-state.minutes}분 길어요.` : `선택한 ${state.minutes}분 이내`}</p><small>지도 보행 경로 기준 예시 참고값이에요.</small></div>
-    <article class="place-card"><span class="demo-badge">예시 데이터</span><h3>${candidate.name}</h3><p>${candidate.type}</p><div class="place-meta"><span><strong>확인됨</strong> · 냉방 실내, 화장실</span><span><strong>확인되지 않음</strong> · 그늘, 벤치, 물</span><span class="warning-inline">운영시간 정보 없음</span><span><strong>자료 신뢰 수준 ${candidate.confidence}</strong> · ${candidate.reason}</span><span>마지막 갱신일 ${candidate.updated}</span></div><button class="secondary" data-action="detail" aria-label="${candidate.name} 상세 보기">상세 보기</button></article>
-    <div class="segment-card"><h3>구간 2 · ${candidate.name} → ${state.destination.name}</h3><div class="duration">예상 ${second}분</div><p>선택한 ${state.minutes}분 ${second > state.minutes ? '초과' : '이내'}</p></div>`;
+function renderPlaceResults(results) {
+  const container = document.querySelector('#place-results');
+  if (!container) return;
+  container.replaceChildren();
+  for (const result of results) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'search-result';
+    button.setAttribute('role', 'option');
+    const name = document.createElement('strong');
+    name.textContent = result.name;
+    const address = document.createElement('small');
+    address.textContent = result.road_address || result.lot_address || '주소 자료 없음';
+    button.append(name, address);
+    button.addEventListener('click', () => selectCenter(result));
+    container.append(button);
+  }
+  if (!results.length) {
+    const empty = document.createElement('p');
+    empty.className = 'search-note search-empty';
+    empty.textContent = '일치하는 공식 쉼터를 찾지 못했어요. 다른 주소나 시설명을 입력해 보세요.';
+    container.append(empty);
+  }
 }
 
-function airconLabel(value) {
-  return value === 'true'
-    ? '공식 자료상 냉방기 수량 확인'
-    : value === 'false'
-      ? '공식 자료상 냉방기 수량 0대'
-      : '공식 자료상 냉방기 수량 미확인';
+function selectCenter(result) {
+  cancelLocationRequest();
+  state.center = { latitude: Number(result.lat), longitude: Number(result.lon) };
+  state.centerLabel = result.name;
+  const selected = document.querySelector('#selected-place');
+  const input = document.querySelector('#place-query');
+  const button = document.querySelector('#find-shelters');
+  if (input) input.value = result.name;
+  if (selected) selected.textContent = `선택한 기준 장소 · ${result.name} · ${result.road_address || result.lot_address || '주소 자료 없음'}`;
+  if (button) button.disabled = false;
+  renderPlaceResults([]);
+  const results = document.querySelector('#place-results');
+  if (results) results.replaceChildren();
+  announce(`${result.name}을 기준 장소로 선택했어요.`);
 }
 
-function airconEvidence(value) {
-  return value === 'true'
-    ? '공식 자료 수량 1대 이상'
-    : value === 'false'
-      ? '공식 자료 수량 0대'
-      : '공식 자료 수량 정보 없음';
+function handleCurrentLocation() {
+  const button = document.querySelector('#use-current-location');
+  const selected = document.querySelector('#selected-place');
+  const input = document.querySelector('#place-query');
+  const findButton = document.querySelector('#find-shelters');
+  const requestId = ++locationRequestId;
+  state.center = null;
+  state.centerLabel = '';
+  if (findButton) findButton.disabled = true;
+  if (selected) selected.textContent = '';
+  const finish = () => {
+    resetLocationButton();
+  };
+  const fail = (message) => {
+    if (requestId !== locationRequestId) return;
+    state.center = null;
+    state.centerLabel = '';
+    if (findButton) findButton.disabled = true;
+    if (selected) selected.textContent = `${message} 주소나 쉼터명으로 계속 찾을 수 있어요.`;
+    finish();
+    input?.focus();
+    announce(selected?.textContent || message);
+  };
+  if (!navigator.geolocation) {
+    fail('이 브라우저에서는 현재 위치를 사용할 수 없어요.');
+    return;
+  }
+  button.disabled = true;
+  button.setAttribute('aria-busy', 'true');
+  button.textContent = '위치 확인 중…';
+  navigator.geolocation.getCurrentPosition(
+    ({ coords }) => {
+      if (requestId !== locationRequestId) return;
+      const latitude = Number(coords?.latitude);
+      const longitude = Number(coords?.longitude);
+      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+        fail('현재 위치 값이 올바르지 않아요.');
+        return;
+      }
+      state.center = { latitude, longitude };
+      state.centerLabel = '현재 위치';
+      if (selected) selected.textContent = '현재 위치를 기준 장소로 선택했어요.';
+      if (findButton) findButton.disabled = false;
+      finish();
+      announce(selected?.textContent || '현재 위치를 기준 장소로 선택했어요.');
+    },
+    (error) => {
+      const messages = {
+        1: '위치 권한이 허용되지 않았어요.',
+        2: '현재 위치를 확인하지 못했어요.',
+        3: '위치 확인 시간이 초과됐어요.',
+      };
+      fail(messages[error?.code] || '현재 위치를 확인하지 못했어요.');
+    },
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 },
+  );
 }
 
-const hardGateLabels = {
-  internal_route_candidate: '내부 경로 후보 · 당일 상태 확인 전',
-  information_insufficient: '정보 부족 · 긍정 연결 제외',
-  condition_false: '냉방 조건 불충족 · 긍정 연결 제외',
-};
-
-const hardGateReasonLabels = {
-  aircon_unknown: '냉방기 수량 정보 없음',
-  aircon_false: '냉방기 수량 0대',
-  weekend_open_unknown: '주말·휴일 개방 여부 미확인',
-  duplicate_original_id: '원본 ID 중복',
-  duplicate_name_address_review: '동일 이름·주소 중복 검토 필요',
-  coordinate_missing_or_invalid: '좌표 누락 또는 오류',
-  source_trace_missing: '원본 추적정보 누락',
-  record_updated_at_invalid: '수정일 정보 오류',
-  record_updated_at_in_future: '수정일이 수집 시각보다 미래임',
-  access_restriction_unverified: '즉시 출입 가능 여부 미검증',
-};
-
-function hardGateReasonLabel(reason) {
-  if (hardGateReasonLabels[reason]) return hardGateReasonLabels[reason];
-  if (reason.startsWith('weekday_hours_')) return '평일 운영시간 정보 미완결';
-  if (reason.startsWith('weekend_open_y_hours_')) return '주말·휴일 운영시간 정보 미완결';
-  if (reason === 'weekend_closed_but_hours_present') return '주말 휴무 표시와 운영시간 상충';
-  if (reason.includes('overnight_without_night_confirmation')) return '야간 운영 확인 정보 부족';
-  return `검토 필요: ${reason}`;
+function formatDistance(distanceM) {
+  return distanceM < 1000 ? `약 ${distanceM}m` : `약 ${(distanceM / 1000).toFixed(1)}km`;
 }
 
-function realShelterCard(item) {
-  const hours = item.operating_hours.weekday ? `평일 ${item.operating_hours.weekday}` : '운영시간 정보 없음';
-  const gateLabel = hardGateLabels[item.hard_gate_status] || '하드게이트 상태 미확인 · 긍정 연결 제외';
-  const gateReasons = item.hard_gate_reasons.length
-    ? item.hard_gate_reasons.map(hardGateReasonLabel).join(', ')
-    : '차단 사유 없음';
-  return `<article class="place-card real-place-card">
-    <span class="real-badge">행정안전부 실데이터</span>
-    <h3>${escapeHtml(item.name)}</h3>
-    <p>${escapeHtml(item.road_address)} · 약 ${item.distance_m.toLocaleString('ko-KR')}m</p>
-    <div class="place-meta">
-      <span><strong>${escapeHtml(gateLabel)}</strong></span>
-      <span>제한 사유 · ${escapeHtml(gateReasons)}</span>
-      <span><strong>${airconLabel(item.has_aircon)}</strong> · ${airconEvidence(item.has_aircon)}</span>
-      <span class="warning-inline">냉방기 수량 필드만 확인했으며 현재 작동·개방을 뜻하지 않아요.</span>
-      <span>${escapeHtml(hours)}</span>
-      <span>마지막 수정 ${escapeHtml(item.record_updated_at)}</span>
-      <span>출처 ${escapeHtml(item.source_provider)} · 원본 ID ${escapeHtml(String(item.original_id))}</span>
-      <span class="warning-inline">${escapeHtml(item.warning)}</span>
+function formatHours(hours) {
+  if (!hours?.weekday && !hours?.weekend) return '운영시간 자료 없음';
+  const parts = [];
+  if (hours.weekday) parts.push(`평일 ${hours.weekday}`);
+  if (hours.weekend) parts.push(`주말·휴일 ${hours.weekend}`);
+  return parts.join(' · ');
+}
+
+function quantity(value, unit) {
+  return Number.isInteger(value) ? `${value.toLocaleString('ko-KR')}${unit}` : '자료 없음';
+}
+
+function shelterCard(shelter) {
+  const name = escapeHtml(shelter.name);
+  const address = escapeHtml(shelter.road_address || shelter.lot_address || '주소 자료 없음');
+  const mapUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${shelter.lat},${shelter.lon}`)}`;
+  return `<article class="real-place-card" data-shelter-id="${escapeHtml(shelter.original_id)}">
+    <span class="real-badge">행정안전부 공식 등록</span>
+    <h2>${name}</h2>
+    <p>${address} · <strong>${escapeHtml(formatDistance(shelter.distance_m))}</strong></p>
+    <p class="warning-inline">정보 부족 · 당일 운영 확인 필요</p>
+    <dl class="definition shelter-facts">
+      <dt>냉방기 수량</dt><dd>${escapeHtml(quantity(shelter.aircon_count, '대'))}</dd>
+      <dt>선풍기 수량</dt><dd>${escapeHtml(quantity(shelter.fan_count, '대'))}</dd>
+      <dt>이용가능인원</dt><dd>${escapeHtml(quantity(shelter.capacity, '명'))}</dd>
+      <dt>공개 운영시간</dt><dd>${escapeHtml(formatHours(shelter.operating_hours))}</dd>
+      <dt>자료 수정</dt><dd>${escapeHtml(shelter.record_updated_at || '자료 없음')}</dd>
+    </dl>
+    <p class="warning-copy">수량과 운영시간 자료는 현재 개방·작동·좌석을 보장하지 않아요.</p>
+    <details>
+      <summary>출처와 제한 사유 보기</summary>
+      <p>출처: <a href="${OFFICIAL_SOURCE_URL}" target="_blank" rel="noopener noreferrer">행정안전부</a> · 원본 ID ${escapeHtml(shelter.original_id)}</p>
+      <p>즉시 출입 가능 여부와 주말·휴일 개방 여부를 독립적으로 확인하지 못해 긍정 경로 후보에서는 제외했어요.</p>
+    </details>
+    <div class="shelter-actions">
+      <a class="secondary button-link" href="${escapeHtml(mapUrl)}" target="_blank" rel="noopener noreferrer">지도에서 위치 열기</a>
+      <button class="text-button share-shelter" type="button" data-share-id="${escapeHtml(shelter.original_id)}">보호자에게 정보 공유</button>
+      <p class="share-feedback" role="status"></p>
     </div>
   </article>`;
 }
 
-async function loadRealShelters() {
-  const container = document.querySelector('#real-shelters');
-  if (!container || !state.destination) return;
-  const aircon = state.conditions.includes('냉방 실내') ? '&aircon=true' : '';
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.className = 'sr-only';
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('복사하지 못했어요.');
+}
+
+function bindResultActions() {
+  document.querySelectorAll('.share-shelter').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const shelter = state.shelters.find((item) => String(item.original_id) === button.dataset.shareId);
+      const feedback = button.parentElement.querySelector('.share-feedback');
+      if (!shelter) return;
+      const address = shelter.road_address || shelter.lot_address || '주소 자료 없음';
+      const text = [
+        shelter.name,
+        address,
+        `냉방기 수량: ${quantity(shelter.aircon_count, '대')}`,
+        '정보 부족: 당일 개방·좌석·냉방기 작동은 이용 전 확인이 필요해요.',
+        '출처: 행정안전부 재난안전데이터공유플랫폼',
+      ].join('\n');
+      try {
+        if (navigator.share) {
+          await navigator.share({ title: `쉬어갈지도 · ${shelter.name}`, text, url: window.location.origin });
+          feedback.textContent = '공유 창을 열었어요.';
+        } else {
+          await copyText(`${text}\n${window.location.origin}`);
+          feedback.textContent = '쉼터 정보를 복사했어요.';
+        }
+      } catch (error) {
+        feedback.textContent = error.name === 'AbortError' ? '공유를 취소했어요.' : '공유하지 못했어요. 다시 시도해 주세요.';
+      }
+      announce(feedback.textContent);
+    });
+  });
+}
+
+function renderResults(status = 'ready') {
+  const label = escapeHtml(state.centerLabel || '선택한 장소');
+  const count = state.shelters.length;
+  app.innerHTML = `${header('다시 찾기')}
+    <section aria-labelledby="results-title">
+      <h1 id="results-title">${label} 주변 공식 쉼터</h1>
+      <p class="lede">직선거리 ${escapeHtml(state.radiusKm)}km 안의 행정안전부 등록 자료를 가까운 순서로 보여드려요.</p>
+      <div class="notice card">
+        <strong>모든 결과는 정보 부족 상태예요</strong>
+        <p>공식 등록은 확인됐지만 당일 개방, 좌석, 냉방기 작동, 즉시 출입 가능 여부는 확인되지 않았어요.</p>
+      </div>
+    </section>
+    ${status === 'loading' ? '<p class="loading-status" role="status">공식 쉼터를 찾고 있어요…</p>' : ''}
+    ${status === 'error' ? `<div class="error-summary" role="alert">${escapeHtml(state.message)}</div>` : ''}
+    ${status === 'ready' ? `<section class="section" aria-labelledby="list-title">
+      <h2 id="list-title">검색 결과 ${count.toLocaleString('ko-KR')}곳</h2>
+      ${count ? `<div id="real-shelters">${state.shelters.map(shelterCard).join('')}</div>` : `<div class="card empty-state"><h3>이 반경에서는 쉼터를 찾지 못했어요</h3><p>더 넓은 반경으로 다시 찾아보거나 다른 기준 장소를 선택해 보세요.</p></div>`}
+    </section>` : ''}
+    <section class="data-summary section" aria-label="데이터 출처">
+      <strong>출처 · <a href="https://www.safetydata.go.kr/disaster-data/view?dataSn=1338" target="_blank" rel="noopener noreferrer">행정안전부</a></strong>
+      <p>재난안전데이터공유플랫폼 · 이용허락범위 제한 없음 · 검색용 인덱스 60,672건</p>
+    </section>
+    <div class="safety"><strong>폭염 이동 주의</strong><p>몸이 불편하면 이동을 멈추고 시원한 곳으로 이동하세요. 어지럼, 두통, 메스꺼움, 의식 저하가 있으면 119에 연락하세요.</p></div>
+  `;
+  document.querySelector('#back-button').addEventListener('click', () => {
+    cancelNearbyRequest();
+    state.center = null;
+    state.centerLabel = '';
+    state.shelters = [];
+    renderSearch();
+    app.focus();
+  });
+  if (status === 'ready') bindResultActions();
+}
+
+async function loadNearby() {
+  if (!state.center || state.loading) return;
+  const requestId = ++nearbyRequestId;
+  nearbyController = new AbortController();
+  state.loading = true;
+  state.view = 'results';
+  renderResults('loading');
   try {
-    const response = await fetch(`/api/shelters/nearby?lat=${state.destination.lat}&lon=${state.destination.lon}&radiusKm=2&limit=3${aircon}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    if (state.screen !== 'result' || !document.querySelector('#real-shelters')) return;
-    container.innerHTML = payload.results.length
-      ? `${payload.results.map(realShelterCard).join('')}<p class="help">${escapeHtml(payload.warnings.join(' '))}</p>`
-      : '<div class="card"><strong>2km 안에서 조건에 맞는 공개자료를 찾지 못했어요.</strong><p>시설이 없다는 뜻은 아니에요.</p></div>';
-  } catch {
-    if (state.screen === 'result' && document.querySelector('#real-shelters')) {
-      container.innerHTML = '<div class="card"><strong>실데이터를 불러오지 못했어요.</strong><p>공개 배포에는 재배포 검토 전 실데이터를 포함하지 않아요. 시설 유무를 판단할 수 없어요.</p></div>';
+    const body = await postAction({
+      action: 'nearby',
+      latitude: state.center.latitude,
+      longitude: state.center.longitude,
+      radiusKm: state.radiusKm,
+      aircon: state.aircon,
+      limit: 20,
+    }, nearbyController.signal);
+    if (requestId !== nearbyRequestId) return;
+    state.shelters = body.results;
+    state.message = '';
+    renderResults('ready');
+    announce(`${body.results.length}곳의 공식 쉼터를 찾았어요.`);
+  } catch (error) {
+    if (requestId !== nearbyRequestId || error.name === 'AbortError') return;
+    state.shelters = [];
+    state.message = error.message;
+    renderResults('error');
+    announce(error.message);
+  } finally {
+    if (requestId === nearbyRequestId) {
+      state.loading = false;
+      nearbyController = null;
     }
   }
 }
 
-function miniMap(type) {
-  return `<div class="mini-map" aria-label="경로 순서 미니맵"><div class="map-path"><span class="map-node">출</span><span class="map-node">${type === 'DATA_GAP' || type === 'ROUTE_ERROR' ? '?' : '1'}</span><span class="map-node">도</span></div><div class="map-labels"><span>출발</span><span>${type === 'DATA_GAP' ? '정보 부족' : type === 'ROUTE_ERROR' ? '계산 불가' : '휴식 후보'}</span><span>도착</span></div></div>`;
-}
-function renderResult() {
-  state.screen = 'result';
-  const type = scenario(); const status = statusContent[type];
-  app.innerHTML = `${header('조건으로', 'input')}
-    <h1>연결 결과</h1><span class="demo-badge">경로·시간 예시 데이터</span><p class="route-summary">${state.start.name} → ${state.destination.name}<br>최대 ${state.minutes}분 · ${state.conditions.join(', ') || '조건 무관'}</p>
-    <button class="text-button" data-action="input">조건 바꾸기</button>
-    <section class="card status-card ${status.cls}"><span class="status-badge">${status.icon} ${status.title}</span><h2>${status.icon} ${status.title}</h2><p>${status.text}</p></section>
-    ${(type === 'REST_GAP' || type === 'DATA_GAP') ? '<aside class="card notice"><strong>무리해서 이동하지 마세요.</strong><p>이동을 미루거나 대중교통·택시·보호자 동행 같은 대안을 검토하세요.</p></aside>' : ''}
-    <details class="card data-summary"><summary>자료 범위 보기</summary><p><strong>예시 데이터 · 출처 2곳 · 가장 오래된 갱신 2025.08</strong></p><ul><li>확인 범위: 선택 지역의 내부 시연용 표본</li><li>그늘·벤치·물 조건은 지역별 자료가 일부 또는 없음</li><li>실제 전국 완전 커버를 뜻하지 않음</li></ul></details>
-    ${miniMap(type)}
-    <section class="timeline" aria-label="구간과 휴식 후보 목록">${resultTimeline(type)}</section>
-    <section class="section" role="region" aria-label="목적지 주변 무더위쉼터 실데이터"><h2>목적지 주변 무더위쉼터 실데이터</h2><p class="warning-inline"><strong>참고 목록 · 경로 연결에 사용하지 않음</strong></p><p class="help">91MB 원본 대신 로컬 SQLite 공간 인덱스에서 2km 이내 최대 3건만 불러와요. 각 카드의 하드게이트 상태와 제한 사유를 확인하세요.</p><div id="real-shelters" class="stack" aria-live="polite"><div class="card">공식 쉼터 자료를 찾는 중이에요.</div></div></section>
-    ${safety()}
-    <div class="actions">${(type === 'REST_GAP' || type === 'DATA_GAP') ? '<button class="primary" data-action="alternatives">다른 이동 방법 살펴보기</button>' : type === 'ROUTE_ERROR' ? '<button class="primary" data-action="input">출발·목적지 수정하기</button>' : '<button class="primary" data-action="detail">후보별 정보 확인하기</button>'}<button class="secondary" data-action="share">보호자에게 공유</button></div>
-    ${emergency()}`;
-  bindCommon();
-  loadRealShelters();
-  announce(`${status.title} 결과 화면`);
-}
-
-function renderDetail() {
-  state.screen = 'detail';
-  const [previousMinutes, nextMinutes] = segmentTimes(scenario());
-  app.innerHTML = `${header('결과로', 'result')}
-    <span class="demo-badge">예시 데이터</span><h1>${candidate.name}</h1><p class="lede">${candidate.address}<br>${candidate.type}</p>
-    <section class="card"><span class="confidence">자료 신뢰 수준: ${candidate.confidence}</span><h2>왜 ${candidate.confidence}인가요?</h2><p>${candidate.reason}</p><p class="help">이 표시는 장소의 안전도나 현재 운영을 뜻하지 않아요.</p></section>
-    <section class="section"><h2>휴식 조건</h2><div class="condition-columns"><div class="condition-box"><strong>자료에서 확인됨</strong><span>${candidate.confirmed.join(', ')}</span></div><div class="condition-box"><strong>확인되지 않음</strong><span>${candidate.unknown.join(', ')}</span></div></div><p class="help">확인되지 않음은 해당 조건이 없다는 뜻이 아니에요.</p></section>
-    <section class="section"><h2>운영·이용 정보</h2><div class="card"><dl class="definition"><dt>운영시간</dt><dd><strong>정보 없음</strong></dd><dt>휴무·제한</dt><dd>정보 없음</dd></dl><p class="warning-inline">운영시간 정보가 없어요. 이용 가능 여부를 보장하지 않아요.</p></div></section>
-    <section class="section"><h2>앞·뒤 구간</h2><div class="card"><p>이전 지점에서 예상 ${previousMinutes}분 · 선택한 ${state.minutes}분 ${previousMinutes > state.minutes ? '초과' : '이내'}</p><p>다음 지점까지 예상 ${nextMinutes}분 · 선택한 ${state.minutes}분 ${nextMinutes > state.minutes ? '초과' : '이내'}</p></div></section>
-    <section class="section"><h2>출처와 갱신 정보</h2><div class="card"><dl class="definition"><dt>출처</dt><dd>${candidate.source}</dd><dt>마지막 갱신일</dt><dd>${candidate.updated}</dd><dt>자료 신뢰 이유</dt><dd>${candidate.reason}</dd></dl><button class="text-button" data-action="source">공식 원문 보기</button></div></section>
-    <aside class="card notice"><strong>정정·현장 확인 안내</strong><p>첫 버전에서는 정정 제보를 받지 않아요. 이용 전 공식 원문이나 현장 안내를 다시 확인해 주세요.</p></aside>
-    <div class="actions"><button class="primary" data-action="map">지도 앱에서 위치 열기</button><button class="secondary" data-action="share">보호자에게 공유</button><button class="text-button" data-action="result">결과로 돌아가기</button></div>
-    ${safety()}${emergency()}`;
-  bindCommon();
-  announce(`${candidate.name} 상세 화면`);
-}
-
-function dialog(title, body, primaryLabel, primaryAction, secondaryLabel = '취소') {
-  const el = document.createElement('dialog');
-  el.setAttribute('aria-label', title);
-  el.innerHTML = `<h2>${title}</h2>${body}<div class="dialog-actions"><button class="primary" data-dialog-action="${primaryAction}">${primaryLabel}</button><button class="secondary" data-dialog-close>${secondaryLabel}</button></div>`;
-  document.body.appendChild(el);
-  el.querySelector('[data-dialog-close]').addEventListener('click', () => el.close());
-  el.addEventListener('close', () => el.remove());
-  el.querySelector('[data-dialog-action]').addEventListener('click', () => handleDialogAction(primaryAction, el));
-  el.showModal();
-  el.querySelector('button').focus();
-}
-function handleDialogAction(action, el) {
-  if (action === 'continue-no-condition') { el.close(); renderResult(); }
-  if (action === 'share-preview') {
-    el.close();
-    el.remove();
-    dialog('보호자 공유 미리보기', `<div class="share-preview"><strong>${state.start.name} → ${state.destination.name}</strong><p>최대 ${state.minutes}분 · ${state.conditions.join(', ') || '조건 무관'}</p><p>결과: ${statusContent[scenario()].title}</p><p>자료 기준일: 예시 데이터 ${candidate.updated}</p></div><p class="help">프로토타입에서는 실제 링크를 만들거나 전송하지 않아요.</p>`, '미리보기 닫기', 'close-preview', '결과 보기');
-  }
-  if (action === 'close-preview') el.close();
-  if (action === 'close-alternatives') { announce('대안 검토 선택됨 — 외부 서비스는 열지 않았어요.'); el.close(); }
-  if (action === 'open-map' || action === 'open-source') { announce('프로토타입이라 외부 페이지는 열지 않았어요.'); el.close(); }
-}
-function useCurrentLocation() {
-  const requestId = ++locationRequestId;
-  if (!navigator.geolocation) {
-    state.location = { status: 'error', message: '이 브라우저에서는 현재 위치를 사용할 수 없어요. 시설명을 직접 입력해 주세요.' };
-    renderInput();
-    return;
-  }
-  state.location = { status: 'loading', message: '' };
-  renderInput();
-  navigator.geolocation.getCurrentPosition(
-    ({ coords }) => {
-      if (requestId !== locationRequestId || state.location.status !== 'loading') return;
-      const { latitude, longitude, accuracy } = coords;
-      if (![latitude, longitude].every(Number.isFinite)) {
-        state.location = { status: 'error', message: '현재 위치 좌표를 확인하지 못했어요. 시설명을 직접 입력해 주세요.' };
-        renderInput();
-        return;
-      }
-      const accuracyText = Number.isFinite(accuracy) ? ` · 정확도 약 ${Math.round(accuracy)}m` : '';
-      state.start = {
-        id: 'current-location',
-        name: '현재 위치',
-        address: `기기 위치정보로 선택됨${accuracyText}`,
-        region: '현재 위치',
-        lat: latitude,
-        lon: longitude,
-      };
-      state.queries.start = '현재 위치';
-      state.location = { status: 'ready', message: '' };
-      delete state.errors.start;
-      renderInput();
-      announce('현재 위치를 출발지로 선택했어요.');
-    },
-    (error) => {
-      if (requestId !== locationRequestId || state.location.status !== 'loading') return;
-      const messages = {
-        1: '위치 권한이 거부됐어요. 브라우저 설정에서 허용하거나 시설명을 직접 입력해 주세요.',
-        2: '현재 위치를 확인하지 못했어요. 잠시 후 다시 시도하거나 시설명을 직접 입력해 주세요.',
-        3: '현재 위치 확인 시간이 초과됐어요. 다시 시도하거나 시설명을 직접 입력해 주세요.',
-      };
-      state.location = { status: 'error', message: messages[error.code] || '현재 위치를 사용할 수 없어요. 시설명을 직접 입력해 주세요.' };
-      renderInput();
-    },
-    { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 },
-  );
-}
-function cancelLocationRequest() {
-  locationRequestId += 1;
-  if (state.location.status === 'loading') state.location = { status: 'idle', message: '' };
-}
-function validateAndSubmit() {
+function scheduleSearch(value) {
   cancelLocationRequest();
-  state.errors = {};
-  if (!state.start) state.errors.start = '출발지를 선택해 주세요.';
-  if (!state.destination) state.errors.destination = '목적지를 선택해 주세요.';
-  if (!state.minutes) state.errors.minutes = '최대 연속 보행시간을 골라 주세요.';
-  if (state.start && state.destination && state.start.id === state.destination.id) state.errors.destination = '출발지와 목적지가 같아요. 다른 장소를 선택해 주세요.';
-  if (Object.keys(state.errors).length) {
-    renderInput();
-    requestAnimationFrame(() => { document.querySelector('.error-summary')?.focus(); document.querySelector(`#${Object.keys(state.errors)[0]}`)?.focus(); });
+  clearTimeout(searchTimer);
+  if (searchController) searchController.abort();
+  const query = value.trim();
+  state.center = null;
+  state.centerLabel = '';
+  const selected = document.querySelector('#selected-place');
+  const submit = document.querySelector('#find-shelters');
+  if (selected) selected.textContent = '';
+  if (submit) submit.disabled = true;
+  if (query.length < 2) {
+    renderPlaceResults([]);
+    const results = document.querySelector('#place-results');
+    if (results) results.replaceChildren();
     return;
   }
-  if (!state.conditions.length) dialog('휴식 조건 없이 볼까요?', '<p>조건을 고르지 않으면 그늘·벤치·냉방 실내·물·화장실 여부와 관계없이 후보를 보여드려요.</p>', '조건 무관으로 계속', 'continue-no-condition', '조건 고르기');
-  else renderResult();
-}
-function bindCommon() {
-  document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => {
-    const action = button.dataset.action;
-    if (action === 'submit') validateAndSubmit();
-    if (action === 'use-location') useCurrentLocation();
-    if (action === 'input') renderInput();
-    if (action === 'result') renderResult();
-    if (action === 'detail') { state.lastResultScroll = scrollY; renderDetail(); window.scrollTo(0,0); }
-    if (action === 'swap') { cancelLocationRequest(); [state.start, state.destination] = [state.destination, state.start]; [state.queries.start, state.queries.destination] = [state.queries.destination, state.queries.start]; renderInput(); }
-    if (action === 'share') dialog('공유할 내용을 확인해 주세요', '<p>출발지·목적지·선택 조건·예상 경로·자료 기준일이 포함돼요.</p><p class="help">프로토타입에서는 실제 링크를 만들거나 전송하지 않아요.</p>', '공유 미리보기', 'share-preview');
-    if (action === 'alternatives') dialog('무리하지 않는 다른 방법을 먼저 살펴보세요', '<div class="stack"><label><input type="radio" name="alt"> 이동 미루기</label><label><input type="radio" name="alt"> 대중교통 확인</label><label><input type="radio" name="alt"> 택시 이용</label><label><input type="radio" name="alt"> 보호자와 동행 상의</label></div><p class="help">외부 예약·호출은 하지 않아요.</p>', '선택 완료', 'close-alternatives', '결과 다시 보기');
-    if (action === 'map') dialog('지도 앱에서 위치를 열까요?', '<p>외부 지도는 위치 확인용이에요. 쉬어갈지도의 휴식 조건이나 구간 판단이 반영되지 않을 수 있어요.</p>', '위치 열기', 'open-map');
-    if (action === 'source') dialog('공식 원문을 확인할까요?', `<p>${candidate.source}</p><p class="help">클릭 프로토타입에서는 외부 전환 없이 확인 단계만 시연해요.</p>`, '원문 위치 확인', 'open-source');
-  }));
+  searchTimer = setTimeout(async () => {
+    searchController = new AbortController();
+    try {
+      const body = await postAction({ action: 'search', query, limit: 8 }, searchController.signal);
+      if (document.querySelector('#place-query')?.value.trim() !== query) return;
+      renderPlaceResults(body.results);
+      announce(`${body.results.length}개의 기준 장소를 찾았어요.`);
+    } catch (error) {
+      if (error.name === 'AbortError') return;
+      renderPlaceResults([]);
+      announce(error.message);
+    }
+  }, 220);
 }
 
-renderInput();
+function bindSearchEvents() {
+  const input = document.querySelector('#place-query');
+  document.querySelector('#use-current-location').addEventListener('click', handleCurrentLocation);
+  input.addEventListener('compositionstart', () => {
+    composing = true;
+    cancelLocationRequest();
+    state.center = null;
+    state.centerLabel = '';
+    document.querySelector('#selected-place').textContent = '';
+    document.querySelector('#find-shelters').disabled = true;
+  });
+  input.addEventListener('compositionend', () => {
+    composing = false;
+    scheduleSearch(input.value);
+  });
+  input.addEventListener('input', () => {
+    if (!composing) scheduleSearch(input.value);
+  });
+  document.querySelectorAll('input[name="radius"]').forEach((radio) => {
+    radio.addEventListener('change', () => { state.radiusKm = Number(radio.value); });
+  });
+  document.querySelectorAll('input[name="aircon"]').forEach((radio) => {
+    radio.addEventListener('change', () => { state.aircon = radio.value; });
+  });
+  document.querySelector('#find-shelters').addEventListener('click', loadNearby);
+}
+
+renderSearch();

@@ -1,5 +1,22 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "rm -rf dist && mkdir -p dist && cp prototype/index.html prototype/styles.css prototype/app.js dist/",
-  "outputDirectory": "dist"
+  "buildCommand": "python3 scripts/build_search_index.py && rm -rf dist && mkdir -p dist && cp prototype/index.html prototype/styles.css prototype/app.js dist/",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/shelters.mjs": {
+      "includeFiles": "prototype/data/**"
+    }
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'" },
+        { "key": "Permissions-Policy", "value": "geolocation=(self), camera=(), microphone=()" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" }
+      ]
+    }
+  ]
 }
